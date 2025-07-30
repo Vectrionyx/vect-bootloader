@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "boot_image_generator",
+    "bootloader",
+    "bootloader_api"
+]
+resolver = "3"
+
+[workspace.dependencies]
+uefi = "0.21"
+uefi-services = "0.14"
+x86_64 = "0.14"
+log = "0.4"
+spin = "0.9"

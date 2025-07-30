@@ -1,7 +1,6 @@
-#![no_std]
-
 use x86_64::{PhysAddr, VirtAddr};
 
+#[repr(C)]
 pub struct MemoryRegion {
     pub start: PhysAddr,
     pub end: PhysAddr,
@@ -18,12 +17,14 @@ pub enum MemoryRegionType {
     Unknown = 0
 }
 
+#[repr(C)]
 pub struct FramebufferInfo {
     pub address: PhysAddr,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
     pub format: PixelFormat,
+    pub bytes_per_pixel: usize,
 }
 
 #[repr(u32)]
@@ -34,6 +35,7 @@ pub enum PixelFormat {
     Undef,
 }
 
+#[repr(C)]
 pub struct BootInfo {
     pub memory_map: &'static [MemoryRegion],
     pub framebuffer: Option<FramebufferInfo>,

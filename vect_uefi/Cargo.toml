@@ -1,0 +1,21 @@
+[package]
+name = "vect_uefi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+uefi = { workspace = true }
+uefi-services = {workspace = true}
+x86_64 = {workspace = true}
+vect_bootapi = { path = "../vect_bootapi"}
+log = {workspace = true}
+spin = {workspace = true}
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

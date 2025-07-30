@@ -3,9 +3,10 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/boot_image_generator/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/bootloader/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/bootloader_api/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vect_bootapi/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vect_bootloader/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vect_uefi/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

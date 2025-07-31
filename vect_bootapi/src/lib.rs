@@ -1,3 +1,4 @@
+#![no_std]
 use x86_64::{PhysAddr, VirtAddr};
 
 #[repr(C)]
@@ -25,6 +26,7 @@ pub struct FramebufferInfo {
     pub stride: usize,
     pub format: PixelFormat,
     pub bytes_per_pixel: usize,
+    pub byte_len: usize,
 }
 
 #[repr(u32)]
@@ -40,4 +42,14 @@ pub struct BootInfo {
     pub memory_map: &'static [MemoryRegion],
     pub framebuffer: Option<FramebufferInfo>,
     pub kernel_entry: VirtAddr,
+}
+
+#[macro_export]
+macro_rules! entry_point {
+    ($path:path) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn _start(boot_info: &'static mut BootInfo) -> ! {
+            $path(boot_info)
+        }
+    }
 }

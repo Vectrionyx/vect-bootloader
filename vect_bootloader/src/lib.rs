@@ -1,7 +1,8 @@
+use std::env;
 use anyhow::Result;
-use fatfs::{FileSystem, FormatVolumeOptions, FsOptions};
+use fatfs::{format_volume, FileSystem, FormatVolumeOptions, FsOptions};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{ Path, PathBuf };
 
 pub struct UefiBoot {
@@ -24,7 +25,7 @@ impl Default for BootConfig {
 impl UefiBoot {
     pub fn new(kernel_path: impl Into<PathBuf>) -> Self {
         Self {
-            kernel_path,
+            kernel_path: kernel_path.into(),
             config: None
         }
     }
@@ -41,16 +42,42 @@ impl UefiBoot {
         let img_path = output_path.as_ref();
         let file = File::create(img_path)?;
         file.set_len(config.image_size_mb * 1024 * 1024)?;
-        let buf = File::options().read(true).write(true).open(img_path)?;
+        let mut buf = File::options().read(true).write(true).open(img_path)?;
+        buf.seek(SeekFrom::Start(0x1FE))?;
+        buf.write_all(&[0x55, 0xAA])?;
+        buf.seek(SeekFrom::Start(0x0))?;
 
         // 2. format as FAT
-        let format_opts = FormatVolumeOptions::new();
-        fatfs::FileSystem::new(&buf, FsOptions::new())?;
+        let format_opts = FormatVolumeOptions::new()
+            .bytes_per_sector(512);
+        format_volume(&buf, format_opts)?;
         let fs = FileSystem::new(buf, FsOptions::new())?;
         let root_dir = fs.root_dir();
 
         // 3.Copy bootloader binary
+        let vect_uefi_file = UefiBoot::locate_vect_efi();
+        let bootloader_efi = Path::new(&vect_uefi_file);
+        let mut efi_dir = root_dir.create_dir("EFI")?;
+        let mut boot_dir = efi_dir.create_dir("BOOT")?;
+        let mut boot_file = boot_dir.create_file("BOOTX64.EFI")?;
+        std::io::copy(&mut File::open(bootloader_efi)?, &mut boot_file)?;
+
+        // 4. Copy kernel (optional for now)
+        let mut kernel_file = root_dir.create_file("KERNEL.ELF")?;
+        std::io::copy(&mut File::open(self.kernel_path)?, &mut kernel_file)?;
+
+        println!("Created UEFI boot image at {:?}", img_path);
 
         Ok(())
+    }
+
+    fn locate_vect_efi() -> PathBuf {
+        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
+        let target_dir = env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".into());
+
+        PathBuf::from(target_dir)
+            .join("x86_64-unknown-uefi")
+            .join(profile)
+            .join("vect_uefi.efi")
     }
 }

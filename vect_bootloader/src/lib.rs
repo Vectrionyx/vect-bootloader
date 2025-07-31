@@ -57,8 +57,8 @@ impl UefiBoot {
         // 3.Copy bootloader binary
         let vect_uefi_file = UefiBoot::locate_vect_efi();
         let bootloader_efi = Path::new(&vect_uefi_file);
-        let mut efi_dir = root_dir.create_dir("EFI")?;
-        let mut boot_dir = efi_dir.create_dir("BOOT")?;
+        let efi_dir = root_dir.create_dir("EFI")?;
+        let boot_dir = efi_dir.create_dir("BOOT")?;
         let mut boot_file = boot_dir.create_file("BOOTX64.EFI")?;
         std::io::copy(&mut File::open(bootloader_efi)?, &mut boot_file)?;
 
@@ -72,12 +72,9 @@ impl UefiBoot {
     }
 
     fn locate_vect_efi() -> PathBuf {
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
-        let target_dir = env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".into());
-
-        PathBuf::from(target_dir)
-            .join("x86_64-unknown-uefi")
-            .join(profile)
-            .join("vect_uefi.efi")
+        let efi_path = env::var("CARGO_BIN_EXE_vect_uefi")
+            .expect("Expected CARGO_BIN_EXE_vect_uefi env var to exist");
+        println!("Found UEFI vect_uefi at {:?}", efi_path);
+        PathBuf::from(efi_path)
     }
 }

@@ -1,15 +1,7 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../vect_uefi/Cargo.toml");
-    println!("cargo:rerun-if-changed=../vect_uefi/src");
+    let efi_path = std::env::var("CARGO_BIN_EXE_vect_uefi").expect("vect_uefi path not found");
+    let out_dir = std::env::var("OUT_DIR").expect("out dir not found");
 
-    let status = std::process::Command::new("cargo")
-        .args([
-            "build",
-            "-p", "vect_uefi",
-            "--target", "x86_64-unknown-uefi",
-            "--release",
-        ])
-        .status()
-        .expect("Failed to run cargo build for vect_uefi");
-    assert!(status.success(), "Failed to build uefi binary");
+    std::fs::write(format!("{}/efi_path.txt", out_dir), efi_path)
+        .expect("Unable to write to file");
 }

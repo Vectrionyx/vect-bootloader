@@ -11,8 +11,9 @@ vect_bootapi = { path = "../vect_bootapi"}
 log = {workspace = true}
 spin = {workspace = true}
 
-[lib]
-crate-type = ["cdylib"]
+[[bin]]
+name = "vect_uefi"
+path = "src/lib.rs"
 
 [profile.dev]
 panic = "abort"

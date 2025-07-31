@@ -1,2 +1,6 @@
-[build]
-target = "x86_64-unknown-uefi"
+[alias]
+bootloader = "build -p vect_bootloader"
+uefi = "build -p vect_uefi --target x86_64-unknown-uefi"
+
+[unstable]
+bindeps = true

@@ -1,13 +1,13 @@
 use anyhow::Result;
-use fatfs::{format_volume, FileSystem, FormatVolumeOptions, FsOptions};
+use fatfs::{FileSystem, FormatVolumeOptions, FsOptions, format_volume};
+use glob::glob;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{ Path, PathBuf };
-use glob::glob;
+use std::path::{Path, PathBuf};
 
 pub struct UefiBoot {
     kernel_path: PathBuf,
-    config: Option<BootConfig>
+    config: Option<BootConfig>,
 }
 
 pub struct BootConfig {
@@ -16,9 +16,7 @@ pub struct BootConfig {
 
 impl Default for BootConfig {
     fn default() -> Self {
-        Self {
-            image_size_mb: 64
-        }
+        Self { image_size_mb: 64 }
     }
 }
 
@@ -26,7 +24,7 @@ impl UefiBoot {
     pub fn new(kernel_path: impl Into<PathBuf>) -> Self {
         Self {
             kernel_path: kernel_path.into(),
-            config: None
+            config: None,
         }
     }
 
@@ -48,8 +46,7 @@ impl UefiBoot {
         buf.seek(SeekFrom::Start(0x0))?;
 
         // 2. format as FAT
-        let format_opts = FormatVolumeOptions::new()
-            .bytes_per_sector(512);
+        let format_opts = FormatVolumeOptions::new().bytes_per_sector(512);
         format_volume(&buf, format_opts)?;
         let fs = FileSystem::new(buf, FsOptions::new())?;
         let root_dir = fs.root_dir();
@@ -72,23 +69,20 @@ impl UefiBoot {
     }
 
     fn locate_vect_efi() -> PathBuf {
-        let profile = std::env::var("PROFILE").expect("Expected a PROFILE env var");
-        let pattern = format!("target/x86_64-unknown-uefi/{}/deps/artifact/vect_uefi-*/bin/vect_uefi-*.efi", profile);
-        let efi_file: PathBuf;
+        let pattern = format!(
+            "target/x86_64-unknown-uefi/*/deps/artifact/vect_uefi-*/bin/vect_uefi-*.efi",
+        );
+        let mut efi_file: Option<PathBuf> = None;
 
-        for entry in glob(&pattern) {
-            match entry {
-                Ok(path) => {
-                    efi_file = PathBuf::from(path);
+        if let Ok(entry) = glob(&pattern) {
+            for path in entry.enumerate() {
+                if efi_file.is_none() {
+                    efi_file = Some(path.1.unwrap());
                     break;
-                },
-                Err(e) => {
-                    println!("Failed to read glob pattern: {}", e);
-                    panic!("Failed to read glob pattern");
                 }
             }
         }
 
-        efi_file
+        efi_file.unwrap()
     }
 }

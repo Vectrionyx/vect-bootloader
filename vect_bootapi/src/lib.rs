@@ -8,6 +8,18 @@ pub struct MemoryRegion {
     pub kind: MemoryRegionType
 }
 
+impl Clone for MemoryRegion {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            end: self.end,
+            kind: self.kind
+        }
+    }
+}
+
+impl Copy for MemoryRegion {}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
 pub enum MemoryRegionType {
@@ -41,6 +53,7 @@ pub enum PixelFormat {
 pub struct BootInfo {
     pub memory_map: &'static [MemoryRegion],
     pub framebuffer: Option<FramebufferInfo>,
+    pub memory_offset: u64,
     pub kernel_entry: VirtAddr,
 }
 

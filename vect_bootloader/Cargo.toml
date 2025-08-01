@@ -8,4 +8,4 @@ anyhow = "1.0"
 fatfs = "0.3"
 gpt = "3.0"
 ovmf-prebuilt = "0.1.0-alpha.1"
-vect_uefi = { path = "../vect_uefi", artifact = "bin", target = "x86_64-unknown-uefi" }
+glob = "0.3.2"

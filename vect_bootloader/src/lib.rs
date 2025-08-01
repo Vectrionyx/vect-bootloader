@@ -1,9 +1,9 @@
-use std::env;
 use anyhow::Result;
 use fatfs::{format_volume, FileSystem, FormatVolumeOptions, FsOptions};
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{ Path, PathBuf };
+use glob::glob;
 
 pub struct UefiBoot {
     kernel_path: PathBuf,
@@ -72,9 +72,23 @@ impl UefiBoot {
     }
 
     fn locate_vect_efi() -> PathBuf {
-        let efi_path = env::var("CARGO_BIN_EXE_vect_uefi")
-            .expect("Expected CARGO_BIN_EXE_vect_uefi env var to exist");
-        println!("Found UEFI vect_uefi at {:?}", efi_path);
-        PathBuf::from(efi_path)
+        let profile = std::env::var("PROFILE").expect("Expected a PROFILE env var");
+        let pattern = format!("target/x86_64-unknown-uefi/{}/deps/artifact/vect_uefi-*/bin/vect_uefi-*.efi", profile);
+        let efi_file: PathBuf;
+
+        for entry in glob(&pattern) {
+            match entry {
+                Ok(path) => {
+                    efi_file = PathBuf::from(path);
+                    break;
+                },
+                Err(e) => {
+                    println!("Failed to read glob pattern: {}", e);
+                    panic!("Failed to read glob pattern");
+                }
+            }
+        }
+
+        efi_file
     }
 }

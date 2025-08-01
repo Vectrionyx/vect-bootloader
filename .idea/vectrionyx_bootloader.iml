@@ -8,6 +8,7 @@
       <sourceFolder url="file://$MODULE_DIR$/vect_bootloader/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vect_uefi/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/vect_bootloader/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

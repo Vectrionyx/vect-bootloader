@@ -31,6 +31,7 @@ pub enum MemoryRegionType {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FramebufferInfo {
     pub address: PhysAddr,
     pub width: usize,

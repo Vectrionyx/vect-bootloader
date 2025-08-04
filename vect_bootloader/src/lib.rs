@@ -59,7 +59,7 @@ impl UefiBoot {
         let mut boot_file = boot_dir.create_file("BOOTX64.EFI")?;
         std::io::copy(&mut File::open(bootloader_efi)?, &mut boot_file)?;
 
-        // 4. Copy kernel (optional for now)
+        // 4. Copy kernel
         let mut kernel_file = root_dir.create_file("KERNEL.ELF")?;
         std::io::copy(&mut File::open(self.kernel_path)?, &mut kernel_file)?;
 

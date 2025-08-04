@@ -5,17 +5,22 @@ use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 use uefi::boot::{get_handle_for_protocol, open_protocol_exclusive, MemoryType, ScopedProtocol};
 use uefi::mem::memory_map::MemoryMap;
+use uefi::proto::media::file::{File};
 use x86_64::{PhysAddr, VirtAddr};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB};
 use vect_bootapi::{BootInfo, FramebufferInfo, MemoryRegion, MemoryRegionType, PixelFormat as KernelPixelFormat};
 use crate::allocator::BootFrameAllocator;
+use crate::elf_reader::parse_elf;
+
+type KernelEntry = extern "C" fn(&BootInfo) -> !;
 
 extern crate uefi;
 extern crate uefi_services;
 extern crate vect_bootapi;
 
 mod allocator;
+mod elf_reader;
 
 const PHYS_MEM_OFFSET: u64 = 0xFFFF_8000_0000_0000;
 
@@ -35,21 +40,34 @@ fn efi_main() -> Status {
     let mut gop = open_protocol_exclusive::<GraphicsOutput>(handle).expect("Opening graphics output");
     let fb_info = get_framebuffer(&mut gop);
 
-    let mmap = boot::memory_map(MemoryType::CONVENTIONAL).unwrap();
-    let mut frame_allocator = BootFrameAllocator::new(&mmap);
-    let mut mapper = unsafe { init_page_tables(&mut frame_allocator)};
+    // let mmap = boot::memory_map(MemoryType::CONVENTIONAL).unwrap();
+    // let mut frame_allocator = unsafe {BootFrameAllocator::new(&mmap)};
+    // let mut mapper = unsafe { init_page_tables(&mut frame_allocator)};
+    //
+    // map_memory_from_uefi(&mut mapper, &mut frame_allocator, &mmap);
+    // let mem_regions = build_memory_regions(&mmap);
+    // let kernel_buf = load_kernel_image();
+    // let kernel_start = parse_elf(kernel_buf);
+    //
+    // static mut BOOT_INFO: BootInfo = BootInfo {
+    //     memory_map: &[],
+    //     framebuffer: None,
+    //     memory_offset: PHYS_MEM_OFFSET,
+    //     kernel_entry: VirtAddr::zero()
+    // };
+    //
+    // unsafe {
+    //     BOOT_INFO.memory_map = mem_regions;
+    //     BOOT_INFO.framebuffer = Some(fb_info);
+    //     BOOT_INFO.kernel_entry = kernel_start;
+    //
+    //     let _ = boot::exit_boot_services(None);
+    //
+    //     let entry_fn: KernelEntry = core::mem::transmute(kernel_start.as_u64());
+    //     let boot_info_ref: &BootInfo = &*(&raw const BOOT_INFO);
+    //     entry_fn(boot_info_ref);
+    // };
 
-    map_memory_from_uefi(&mut mapper, &mut frame_allocator, &mmap);
-    let mem_regions = build_memory_regions(&mmap);
-
-    let boot_info = BootInfo {
-        memory_map: mem_regions,
-        framebuffer: Some(fb_info),
-        memory_offset: PHYS_MEM_OFFSET,
-        kernel_entry: VirtAddr::new(0), // todo: get kernel entry
-    };
-
-    log::info!("Hello from Vect UEFI!");
     Status::SUCCESS
 }
 
@@ -80,7 +98,7 @@ fn get_framebuffer(gop: &mut ScopedProtocol<GraphicsOutput>) -> FramebufferInfo 
 fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
     mapper: &mut M,
     frame_allocator: &mut A,
-    memory_map: &dyn uefi::mem::memory_map::MemoryMap
+    memory_map: &dyn MemoryMap
 ) {
     for descriptor in memory_map.entries() {
         let phys_start = descriptor.phys_start;
@@ -153,7 +171,7 @@ fn build_memory_regions<'a>(
 }
 
 unsafe fn init_page_tables(
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    _frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> OffsetPageTable<'static> {
     let (level_4_frame, _) = Cr3::read();
     let phys_mem_offset = VirtAddr::new(PHYS_MEM_OFFSET);
@@ -161,7 +179,48 @@ unsafe fn init_page_tables(
     let phys_addr = level_4_frame.start_address();
     let virt_addr = phys_mem_offset + phys_addr.as_u64();
     let page_table_ptr: *mut PageTable = virt_addr.as_mut_ptr();
+    unsafe {
+        let l4_table = &mut *page_table_ptr;
+        OffsetPageTable::new(l4_table, phys_mem_offset)
+    }
+}
 
-    let l4_table = &mut *page_table_ptr;
-    OffsetPageTable::new(l4_table, phys_mem_offset)
+fn load_kernel_image() -> &'static [u8] {
+    use uefi::proto::media::fs::SimpleFileSystem;
+    use uefi::proto::media::file::{FileMode, FileAttribute, FileType, FileInfo};
+    use uefi::CStr16;
+
+    let sfs_handle = get_handle_for_protocol::<SimpleFileSystem>()
+        .expect("Opening SimpleFileSystem failed");
+    let mut sfs = open_protocol_exclusive::<SimpleFileSystem>(sfs_handle).expect("Opening SimpleFileSystem failed");
+    let mut root = sfs.open_volume().expect("Failed to open volume");
+
+    let mut str_buff = [0u16; 64];
+    let kernel_path = CStr16::from_str_with_buf("\\EFI\\KERNEL.ELF", &mut str_buff)
+        .expect("Bad kernel path");
+
+    let file_handle = root.open(kernel_path, FileMode::Read, FileAttribute::empty())
+        .expect("Failed to open kernel")
+        .into_type()
+        .expect("Failed to convert file type");
+
+    let mut file = match file_handle {
+        FileType::Regular(f) => f,
+        _ => panic!("Bad file type"),
+    };
+
+    let mut info_buf = [0u8; 512];
+    let info = file.get_info::<FileInfo>(&mut info_buf)
+        .expect("Failed to get file info");
+    let file_size = info.file_size();
+    let buf_ptr = boot::allocate_pool(MemoryType::LOADER_DATA, file_size as usize)
+        .expect("Failed to allocate buffer");
+    let alloc_size = ((file_size + 7) & !7) as usize;
+    let kernel_buffer = unsafe {
+        core::slice::from_raw_parts_mut(buf_ptr.as_ptr(), alloc_size)
+    };
+
+    let read_len = file.read(kernel_buffer).expect("Failed to read kernel");
+    assert_eq!(read_len, file_size as usize);
+    kernel_buffer
 }

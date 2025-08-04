@@ -13,7 +13,7 @@ spin = {workspace = true}
 
 [[bin]]
 name = "vect_uefi"
-path = "src/lib.rs"
+path = "src/main.rs"
 
 [profile.dev]
 panic = "abort"

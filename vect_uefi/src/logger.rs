@@ -49,6 +49,7 @@ impl fmt::Write for SerialWriter {
         for &b in s.as_bytes() {
             if b == b'\n' {
                 SerialLogger::write_byte(b'\n');
+                continue;
             }
             SerialLogger::write_byte(b);
         }

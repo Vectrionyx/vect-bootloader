@@ -1,11 +1,13 @@
 #![no_std]
 #![no_main]
 
-use core::mem::MaybeUninit;
 use crate::allocator::BootFrameAllocator;
 use crate::elf_reader::parse_elf;
 use crate::logger::{LOGGER, SerialLogger};
-use uefi::boot::{MemoryType, ScopedProtocol, get_handle_for_protocol, open_protocol_exclusive, MemoryDescriptor};
+use core::mem::MaybeUninit;
+use uefi::boot::{
+    MemoryDescriptor, MemoryType, ScopedProtocol, get_handle_for_protocol, open_protocol_exclusive,
+};
 use uefi::mem::memory_map::MemoryMap;
 use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
@@ -56,11 +58,17 @@ fn efi_main() -> Status {
     let kernel_buf = load_kernel_image();
     let kernel_start = parse_elf(kernel_buf);
     unsafe {
-        let mut frame_allocator = BootFrameAllocator::new(&mmap);
+        let mmap_clone = clone_mem_map(&mmap);
+        log::info!("Creating allocator from cloned memory..");
+        let mut frame_allocator = BootFrameAllocator::new(mmap_clone);
         let mut mapper = init_page_tables(&mut frame_allocator);
 
-        let mmap_clone = clone_mem_map(&mmap);
-        map_memory_from_uefi(&mut mapper, &mut frame_allocator, mmap_clone);
+        map_memory_from_uefi(
+            &mut mapper,
+            &mut frame_allocator,
+            mmap_clone,
+            &[0x7c01800, 0x62c8018u64],
+        );
     }
     // static mut BOOT_INFO: BootInfo = BootInfo {
     //     memory_map: &[],
@@ -76,9 +84,9 @@ fn efi_main() -> Status {
     //     BOOT_INFO.memory_map = mem_regions;
     //     BOOT_INFO.framebuffer = Some(fb_info);
     //     BOOT_INFO.kernel_entry = kernel_start;
-        // let entry_fn: KernelEntry = core::mem::transmute(kernel_start.as_u64());
-        // let boot_info_ref: &BootInfo = &*(&raw const BOOT_INFO);
-        // entry_fn(boot_info_ref);
+    // let entry_fn: KernelEntry = core::mem::transmute(kernel_start.as_u64());
+    // let boot_info_ref: &BootInfo = &*(&raw const BOOT_INFO);
+    // entry_fn(boot_info_ref);
     // };
     //
     Status::SUCCESS
@@ -111,15 +119,15 @@ fn get_framebuffer(gop: &mut ScopedProtocol<GraphicsOutput>) -> FramebufferInfo 
 fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
     mapper: &mut M,
     frame_allocator: &mut A,
-    memory_map: &dyn MemoryMap,
+    memory_map: &'static [MemoryDescriptor],
+    critical_addrs: &[u64],
 ) {
-    for descriptor in memory_map.entries() {
+    fn map_descriptor<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
+        mapper: &mut M,
+        frame_allocator: &mut A,
+        descriptor: &MemoryDescriptor,
+    ) {
         let mem_type = descriptor.ty;
-        // if descriptor.phys_start == 0 {
-        //     continue;
-        // }
-
-        // Only map RAM-like memory types
         match mem_type {
             MemoryType::CONVENTIONAL
             | MemoryType::BOOT_SERVICES_CODE
@@ -130,71 +138,64 @@ fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
                 let page_count = descriptor.page_count;
                 let virt_start = PHYS_MEM_OFFSET + phys_start;
                 let flags = flags_for(mem_type);
+
                 log::warn!(
-                    "Memory type: {:?}, Start: {:#X}, Pages: {:#}, End: {:#X}, used flags: {:?}\nDescriptor virt: {:#X} || My virt: {:#X}",
+                    "Mapping {:?} Start: {:#X}, Pages: {}, End: {:#X}, flags: {:?}",
                     descriptor.ty,
-                    descriptor.phys_start,
-                    descriptor.page_count,
-                    descriptor.phys_start + (descriptor.page_count * 4096),
-                    flags,
-                    descriptor.virt_start,
-                    virt_start
+                    phys_start,
+                    page_count,
+                    phys_start + (page_count * 4096),
+                    flags
                 );
 
                 for i in 0..page_count {
-                    let phys_addr = PhysAddr::new(phys_start + i * 4096);
-                    let virt_addr = VirtAddr::new(virt_start + i * 4096);
-
-                    log::warn!("Page address {:#X} is {:#X}", virt_addr, phys_addr);
+                    let phys_addr = PhysAddr::new(phys_start + (i * 4096));
+                    let virt_addr = VirtAddr::new(virt_start + (i * 4096));
 
                     let page: Page<Size4KiB> = Page::containing_address(virt_addr);
                     let frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(phys_addr);
 
                     unsafe {
-                        // Only map if not already mapped
                         if mapper.translate_page(page).is_err() {
                             mapper
                                 .map_to(page, frame, flags, frame_allocator)
-                                .expect("Failed to map memory")
+                                .expect("Mapping error")
                                 .flush();
                         }
                     }
                 }
             }
-            _ => {
-                // Skip runtime, ACPI, MMIO, reserved, etc.
-                continue;
+            _ => {}
+        }
+    }
+
+    for &addr in critical_addrs {
+        for descriptor in memory_map {
+            if addr >= descriptor.phys_start
+                && addr < descriptor.phys_start + descriptor.page_count * 4096
+            {
+                log::info!("Mapping critical address {:#X}", addr);
+                map_descriptor(mapper, frame_allocator, descriptor);
+                break;
             }
         }
     }
-}
 
-// fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
-//     mapper: &mut M,
-//     frame_allocator: &mut A,
-//     memory_map: &dyn MemoryMap,
-// ) {
-//     for descriptor in memory_map.entries() {
-//         let phys_start = descriptor.phys_start;
-//         let page_count = descriptor.page_count;
-//         let virt_start = PHYS_MEM_OFFSET + phys_start;
-//         let flags = flags_for(descriptor.ty);
-//         for i in 0..page_count {
-//             let phys_addr = PhysAddr::new(phys_start + i * 4096);
-//             let virt_addr = VirtAddr::new(virt_start + i * 4096);
-//
-//             let page: Page<Size4KiB> = Page::containing_address(virt_addr);
-//             let frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(phys_addr);
-//
-//             unsafe {
-//                 mapper
-//                     .map_to(page, frame, flags, frame_allocator)
-//                     .expect("Failed to map memory")
-//                     .flush();
-//             }
-//         }
-//     }
-// }
+    for descriptor in memory_map {
+        let mut skip = false;
+        for &addr in critical_addrs {
+            if addr >= descriptor.phys_start
+                && addr < descriptor.phys_start + descriptor.page_count * 4096
+            {
+                skip = true;
+                break;
+            }
+        }
+        if !skip {
+            map_descriptor(mapper, frame_allocator, descriptor);
+        }
+    }
+}
 
 fn flags_for(mem_type: MemoryType) -> PageTableFlags {
     match mem_type {
@@ -300,20 +301,22 @@ fn load_kernel_image() -> &'static [u8] {
 }
 
 fn clone_mem_map(mem_map: &dyn MemoryMap) -> &'static [MemoryDescriptor] {
-    const MAX_ENTRIES: usize = 256;
-    static mut MEMORY_MAP_COPY: MaybeUninit<[MemoryDescriptor; MAX_ENTRIES]> =
-        MaybeUninit::uninit();
-    static mut COUNT: usize = 0;
-
+    log::info!("Cloning memory map");
     let mut local_count = 0;
 
+    let buf_ptr = boot::allocate_pool(
+        MemoryType::LOADER_DATA,
+        size_of::<[MemoryDescriptor; 256]>(),
+    )
+    .unwrap();
+    let ptr = buf_ptr.as_ptr() as *mut MemoryDescriptor;
+    log::info!("Mem Map Clone Addr: {:#X}", ptr as usize);
     unsafe {
-        let ptr = MEMORY_MAP_COPY.as_mut_ptr() as *mut MemoryDescriptor;
         for desc in mem_map.entries() {
             *ptr.add(local_count) = *desc;
             local_count += 1;
         }
-        COUNT = local_count;
-        &(*MEMORY_MAP_COPY.as_ptr())[..COUNT]
+        log::info!("Cloned memory map. Regions count: {}", local_count);
+        core::slice::from_raw_parts(ptr, local_count)
     }
 }

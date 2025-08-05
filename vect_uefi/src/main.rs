@@ -1,9 +1,11 @@
 #![no_std]
 #![no_main]
 
+use core::mem::MaybeUninit;
 use crate::allocator::BootFrameAllocator;
 use crate::elf_reader::parse_elf;
-use uefi::boot::{MemoryType, ScopedProtocol, get_handle_for_protocol, open_protocol_exclusive};
+use crate::logger::{LOGGER, SerialLogger};
+use uefi::boot::{MemoryType, ScopedProtocol, get_handle_for_protocol, open_protocol_exclusive, MemoryDescriptor};
 use uefi::mem::memory_map::MemoryMap;
 use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
@@ -16,14 +18,13 @@ use x86_64::structures::paging::{
     FrameAllocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
-use crate::logger::{SerialLogger, LOGGER};
 
 type KernelEntry = extern "C" fn(&BootInfo) -> !;
 
+extern crate alloc;
 extern crate uefi;
 extern crate uefi_services;
 extern crate vect_bootapi;
-extern crate alloc;
 
 mod allocator;
 mod elf_reader;
@@ -45,7 +46,7 @@ fn efi_main() -> Status {
     log::set_logger(&LOGGER)
         .map(|()| log::set_max_level(log::LevelFilter::Trace))
         .unwrap();
-    let _ = boot::memory_map(MemoryType::CONVENTIONAL);
+    let mmap = boot::memory_map(MemoryType::LOADER_DATA).unwrap();
     let handle = get_handle_for_protocol::<GraphicsOutput>().unwrap();
     let mut gop =
         open_protocol_exclusive::<GraphicsOutput>(handle).expect("Opening graphics output");
@@ -54,31 +55,33 @@ fn efi_main() -> Status {
 
     let kernel_buf = load_kernel_image();
     let kernel_start = parse_elf(kernel_buf);
-
-    static mut BOOT_INFO: BootInfo = BootInfo {
-        memory_map: &[],
-        framebuffer: None,
-        memory_offset: PHYS_MEM_OFFSET,
-        kernel_entry: VirtAddr::zero(),
-    };
-
     unsafe {
-        let mmap = boot::exit_boot_services(None);
         let mut frame_allocator = BootFrameAllocator::new(&mmap);
         let mut mapper = init_page_tables(&mut frame_allocator);
 
-        map_memory_from_uefi(&mut mapper, &mut frame_allocator, &mmap);
-        // let mem_regions = build_memory_regions(&mmap);
-        //
-        // BOOT_INFO.memory_map = mem_regions;
-        // BOOT_INFO.framebuffer = Some(fb_info);
-        // BOOT_INFO.kernel_entry = kernel_start;
-        let entry_fn: KernelEntry = core::mem::transmute(kernel_start.as_u64());
-        let boot_info_ref: &BootInfo = &*(&raw const BOOT_INFO);
-        entry_fn(boot_info_ref);
-    };
-
-    // Status::SUCCESS
+        let mmap_clone = clone_mem_map(&mmap);
+        map_memory_from_uefi(&mut mapper, &mut frame_allocator, mmap_clone);
+    }
+    // static mut BOOT_INFO: BootInfo = BootInfo {
+    //     memory_map: &[],
+    //     framebuffer: None,
+    //     memory_offset: PHYS_MEM_OFFSET,
+    //     kernel_entry: VirtAddr::zero(),
+    // };
+    //
+    // unsafe {
+    //     let mmap = boot::exit_boot_services(None);
+    //     let mem_regions = build_memory_regions(&mmap);
+    //
+    //     BOOT_INFO.memory_map = mem_regions;
+    //     BOOT_INFO.framebuffer = Some(fb_info);
+    //     BOOT_INFO.kernel_entry = kernel_start;
+        // let entry_fn: KernelEntry = core::mem::transmute(kernel_start.as_u64());
+        // let boot_info_ref: &BootInfo = &*(&raw const BOOT_INFO);
+        // entry_fn(boot_info_ref);
+    // };
+    //
+    Status::SUCCESS
 }
 
 fn get_framebuffer(gop: &mut ScopedProtocol<GraphicsOutput>) -> FramebufferInfo {
@@ -112,6 +115,9 @@ fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
 ) {
     for descriptor in memory_map.entries() {
         let mem_type = descriptor.ty;
+        // if descriptor.phys_start == 0 {
+        //     continue;
+        // }
 
         // Only map RAM-like memory types
         match mem_type {
@@ -124,10 +130,22 @@ fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
                 let page_count = descriptor.page_count;
                 let virt_start = PHYS_MEM_OFFSET + phys_start;
                 let flags = flags_for(mem_type);
+                log::warn!(
+                    "Memory type: {:?}, Start: {:#X}, Pages: {:#}, End: {:#X}, used flags: {:?}\nDescriptor virt: {:#X} || My virt: {:#X}",
+                    descriptor.ty,
+                    descriptor.phys_start,
+                    descriptor.page_count,
+                    descriptor.phys_start + (descriptor.page_count * 4096),
+                    flags,
+                    descriptor.virt_start,
+                    virt_start
+                );
 
                 for i in 0..page_count {
                     let phys_addr = PhysAddr::new(phys_start + i * 4096);
                     let virt_addr = VirtAddr::new(virt_start + i * 4096);
+
+                    log::warn!("Page address {:#X} is {:#X}", virt_addr, phys_addr);
 
                     let page: Page<Size4KiB> = Page::containing_address(virt_addr);
                     let frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(phys_addr);
@@ -150,7 +168,6 @@ fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
         }
     }
 }
-
 
 // fn map_memory_from_uefi<M: Mapper<Size4KiB>, A: FrameAllocator<Size4KiB>>(
 //     mapper: &mut M,
@@ -280,4 +297,23 @@ fn load_kernel_image() -> &'static [u8] {
     let read_len = file.read(kernel_buffer).expect("Failed to read kernel");
     assert_eq!(read_len, file_size as usize);
     kernel_buffer
+}
+
+fn clone_mem_map(mem_map: &dyn MemoryMap) -> &'static [MemoryDescriptor] {
+    const MAX_ENTRIES: usize = 256;
+    static mut MEMORY_MAP_COPY: MaybeUninit<[MemoryDescriptor; MAX_ENTRIES]> =
+        MaybeUninit::uninit();
+    static mut COUNT: usize = 0;
+
+    let mut local_count = 0;
+
+    unsafe {
+        let ptr = MEMORY_MAP_COPY.as_mut_ptr() as *mut MemoryDescriptor;
+        for desc in mem_map.entries() {
+            *ptr.add(local_count) = *desc;
+            local_count += 1;
+        }
+        COUNT = local_count;
+        &(*MEMORY_MAP_COPY.as_ptr())[..COUNT]
+    }
 }

@@ -1,4 +1,3 @@
-use alloc::format;
 use core::fmt;
 use log::{Level, Record};
 use x86_64::instructions::port::{Port, PortGeneric, ReadWriteAccess};
@@ -64,6 +63,7 @@ impl log::Log for SerialLogger {
     }
 
     fn log(&self, record: &Record) {
+        use core::fmt::Write;
         if self.enabled(record.metadata()) {
             let mut writer = SerialWriter;
             let _ = write!(writer, "{} - {}\n", record.level(), record.args());
